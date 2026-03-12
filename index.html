@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Relatório de Evolução Diária - Neurointegrando</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+        body { font-family: 'Poppins', sans-serif; margin: 0; background-color: #f8f9fa; color: #495057; overflow-x: hidden; position: relative; }
+        body::before, body::after { content: ''; position: fixed; border-radius: 50%; opacity: 0.1; z-index: -1; }
+        body::before { width: 400px; height: 400px; background-color: #00b4e4; top: -150px; left: -150px; }
+        body::after { width: 500px; height: 500px; background-color: #f7941d; bottom: -200px; right: -200px; }
+        .container { max-width: 800px; margin: 3em auto; background: white; padding: 2.5em; border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.1); position: relative; z-index: 1; }
+        .header { text-align: center; border-bottom: 1px solid #dee2e6; padding-bottom: 1.5em; margin-bottom: 2em; }
+        .header h1 { color: #1e3a8a; font-size: 2em; margin: 0; }
+        .header p { font-size: 1.1em; color: #6c757d; margin-top: 0.5em; }
+        label { display: block; margin-top: 1.5em; margin-bottom: 0.7em; font-weight: 600; color: #343a40; }
+        input[type="file"], input[type="date"] { border: 2px dashed #ced4da; padding: 1em; border-radius: 8px; width: 100%; box-sizing: border-box; background-color: #f8f9fa; cursor: pointer; transition: border-color 0.3s, background-color 0.3s; font-family: 'Poppins', sans-serif; color: #495057; }
+        input[type="file"]:hover, input[type="date"]:hover { border-color: #007bff; background-color: #e9ecef; }
+        .date-filter { display: flex; gap: 1em; }
+        .date-filter div { flex: 1; }
+        button { background-color: #1e3a8a; color: white; padding: 0.8em 1.5em; border: none; border-radius: 8px; font-size: 1.1em; font-weight: 600; font-family: 'Poppins', sans-serif; cursor: pointer; margin-top: 2em; width: 100%; transition: background-color 0.3s, transform 0.2s; }
+        button:hover { background-color: #2563eb; transform: translateY(-2px); }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .spinner { display: none; margin: 2em auto 0 auto; border: 5px solid #f3f3f3; border-top: 5px solid #1e3a8a; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Gerador de Relatórios</h1>
+            <p>Neurointegrando</p>
+        </div>
+        
+        <form id="reportForm">
+            <div>
+                <label for="controle_pdf">1. Anexe o Controle de Frequência (.pdf)</label>
+                <input type="file" id="controle_pdf" name="controle_pdf" accept=".pdf" required>
+            </div>
+            <div>
+                <label for="prontuario_pdf">2. Anexe o Prontuário com Evoluções (.pdf)</label>
+                <input type="file" id="prontuario_pdf" name="prontuario_pdf" accept=".pdf" required>
+            </div>
+            <div>
+                <label for="prontuario_anterior_pdf">3. Anexe o Prontuário Anterior (Opcional - Para cobrir vazios)</label>
+                <input type="file" id="prontuario_anterior_pdf" name="prontuario_anterior_pdf" accept=".pdf">
+            </div>
+            <div class="date-filter">
+                <div>
+                    <label for="data_inicio">4. Filtrar por Período (Opcional)</label>
+                    <input type="date" id="data_inicio" name="data_inicio">
+                </div>
+                <div>
+                    <label for="data_fim">&nbsp;</label>
+                    <input type="date" id="data_fim" name="data_fim">
+                </div>
+            </div>
+            <button type="submit">Gerar e Baixar Relatório (.docx)</button>
+        </form>
+        <div id="loadingSpinner" class="spinner"></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('reportForm');
+        const spinner = document.getElementById('loadingSpinner');
+        const button = form.querySelector('button');
+
+        form.addEventListener('submit', function(event) {
+            event.preventDefault(); // Impede o envio padrão do formulário
+
+            spinner.style.display = 'block';
+            button.disabled = true;
+            button.textContent = 'Gerando...';
+
+            const formData = new FormData(form);
+
+            fetch('/', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Erro no servidor. Verifique os arquivos e tente novamente.');
+                }
+                const disposition = response.headers.get('Content-Disposition');
+                let filename = 'relatorio.docx';
+                if (disposition && disposition.indexOf('attachment') !== -1) {
+                    const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+                    const matches = filenameRegex.exec(disposition);
+                    if (matches != null && matches[1]) {
+                        filename = matches[1].replace(/['"]/g, '');
+                    }
+                }
+                return response.blob().then(blob => ({ blob, filename }));
+            })
+            .then(({ blob, filename }) => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                // Sucesso: Esconde o spinner e reativa o botão
+                spinner.style.display = 'none';
+                button.disabled = false;
+                button.textContent = 'Gerar e Baixar Relatório (.docx)';
+            })
+            .catch(error => {
+                console.error('Erro:', error);
+                alert(error.message);
+                // Erro: Esconde o spinner e reativa o botão
+                spinner.style.display = 'none';
+                button.disabled = false;
+                button.textContent = 'Gerar e Baixar Relatório (.docx)';
+            });
+        });
+    </script>
+</body>
+</html>
