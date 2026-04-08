@@ -1,85 +1,22 @@
-import streamlit as st
 import os
 import re
 import pandas as pd
 import PyPDF2
+from flask import Flask, request, render_template, send_file
 from datetime import datetime
 from io import BytesIO
 from docx import Document
 from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-# --- CONFIGURAÇÃO ESTILO APPLE ---
-st.set_page_config(
-    page_title="Neuro | Report Generator",
-    page_icon="📋",
-    layout="centered"
-)
+# --- Configuração do Flask ---
+app = Flask(__name__)
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-# --- CSS: ESTÉTICA MINIMALISTA PREMIUM ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-        font-family: 'Inter', sans-serif !important;
-        background-color: #ffffff !important;
-        color: #1d1d1f !important;
-    }
-
-    .main-title {
-        font-weight: 700;
-        font-size: 52px;
-        letter-spacing: -1.5px;
-        text-align: center;
-        margin-top: 40px;
-        color: #1d1d1f;
-        margin-bottom: 5px;
-    }
-    .sub-title {
-        font-weight: 400;
-        font-size: 22px;
-        color: #86868b;
-        text-align: center;
-        margin-bottom: 50px;
-        letter-spacing: -0.5px;
-    }
-
-    /* Estilização dos inputs e containers */
-    [data-testid="stFileUploadBlock"], .stDateInput {
-        background-color: #f5f5f7 !important;
-        border-radius: 18px !important;
-        padding: 15px !important;
-        border: 1px solid #d2d2d7 !important;
-    }
-
-    .stButton>button {
-        width: 100% !important;
-        border-radius: 12px !important;
-        height: 55px !important;
-        background-color: #0071e3 !important;
-        color: white !important;
-        font-weight: 600 !important;
-        font-size: 17px !important;
-        border: none !important;
-        transition: all 0.2s ease;
-        margin-top: 20px;
-    }
-    .stButton>button:hover {
-        background-color: #0077ed !important;
-        transform: scale(1.01);
-    }
-
-    h3 {
-        font-weight: 600 !important;
-        color: #1d1d1f !important;
-        letter-spacing: -0.5px !important;
-        margin-top: 30px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- MAPA DE PROFISSIONAIS E PALAVRAS IGNORADAS ---
-# (Mantidos exatamente como no seu código original)
+# --- MAPA DE PROFISSIONAIS ---
 PROFESSIONAL_MAP = {
     "Amira Antonella Pontes de Almeida": {
         'Psicologia': 'Leonardo Santana Honorato', 'Psicomotricidade': 'Camila Barbosa dos Santos Silveiro',
@@ -126,78 +63,328 @@ PROFESSIONAL_MAP = {
         'Fonoaudiologia': 'A Definir', 'CME': 'A Definir', 'Psicologia': 'A Definir'
     }
 }
-PALAVRAS_IGNORADAS = ['natal', 'ano novo', 'feriado', 'falta', 'atestado', 'cancelado', 'recesso']
 
-# --- FUNÇÕES CORE (LÓGICA ORIGINAL ADAPTADA) ---
-def extrair_texto_pdf(file):
-    reader = PyPDF2.PdfReader(file)
-    texto = ""
-    for page in reader.pages:
-        texto += page.extract_text() or ""
-    return texto
+# --- Palavras Ignoradas (Feriados, Faltas e Atestados) ---
+PALAVRAS_IGNORADAS = [
+    'natal', 'ano novo', 'páscoa', 'carnaval', 'dia das crianças', 
+    'dia das mães', 'dia dos pais', 'festa', 'festividade', 
+    'feriado', 'férias', 'papai noel', 'comemoração', 'recesso',
+    'falta', 'faltou', 'ausência', 'ausente', 'não compareceu', 
+    'atestado', 'cancelado', 'cancelada', 'desmarcou', 'desmarcado'
+]
 
-def analisar_prontuario(texto):
+# --- Funções de Processamento ---
+def extrair_texto_de_pdf(caminho_pdf):
+    texto_completo = ""
+    with open(caminho_pdf, 'rb') as arquivo_pdf:
+        leitor_pdf = PyPDF2.PdfReader(arquivo_pdf)
+        for pagina in leitor_pdf.pages:
+            try:
+                texto_completo += pagina.extract_text() or ""
+            except Exception as e:
+                print(f"Erro ao extrair texto da página: {e}")
+                continue
+    return texto_completo
+
+def get_schedule_for_patient(texto_pdf):
+    paciente_identificado = None
+    texto_pdf_normalizado = texto_pdf.lower()
+    for nome_paciente in PROFESSIONAL_MAP.keys():
+        if nome_paciente.lower() in texto_pdf_normalizado:
+            paciente_identificado = nome_paciente
+            break
+            
+    if not paciente_identificado:
+        return None, None
+    
+    # --- LÓGICA MARÇO 2026 ---
+    dados = []
+
+    if paciente_identificado == "Amira Antonella Pontes de Almeida":
+        for dia in ['04/03/2026', '05/03/2026', '18/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia'), (dia, 'Psicomotricidade')])
+        for dia in ['06/03/2026', '20/03/2026', '27/03/2026']:
+            dados.extend([(dia, 'Fonoaudiologia'), (dia, 'Psicologia'), (dia, 'Psicopedagogia')])
+        for dia in ['11/03/2026', '25/03/2026']:
+             dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia')])
+        for dia in ['19/03/2026', '26/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Psicologia'), (dia, 'Psicomotricidade')])
+        dados.extend([('24/03/2026', 'Terapia Ocupacional'), ('24/03/2026', 'Fonoaudiologia'), ('24/03/2026', 'Psicomotricidade')])
+
+    elif paciente_identificado == "Arthur Pinheiro Bertoni":
+        for dia in ['04/03/2026', '18/03/2026', '25/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicopedagogia')])
+
+    elif paciente_identificado == "Augusto Quina Severo":
+        for dia in ['03/03/2026', '17/03/2026', '24/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Psicopedagogia')])
+        for dia in ['05/03/2026', '12/03/2026', '19/03/2026', '26/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Psicologia')])
+        dados.extend([('31/03/2026', 'Fisioterapia'), ('31/03/2026', 'Fisioterapia'), ('31/03/2026', 'Psicopedagogia')])
+
+    elif paciente_identificado == "Gabriel Henrique Rocha Oliveira":
+        # Paciente apenas com faltas em março, retorna lista vazia
+        pass
+
+    elif paciente_identificado == "Heitor Gabriel Campos Conceição":
+        for dia in ['02/03/2026', '04/03/2026', '09/03/2026', '11/03/2026', '16/03/2026', '18/03/2026', '30/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia'), (dia, 'Psicopedagogia')])
+        for dia in ['03/03/2026', '24/03/2026', '31/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicopedagogia')])
+        for dia in ['05/03/2026', '12/03/2026', '13/03/2026', '19/03/2026', '20/03/2026', '27/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia')])
+        for dia in ['10/03/2026', '17/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia')])
+        dados.extend([('23/03/2026', 'Fonoaudiologia'), ('23/03/2026', 'Psicologia'), ('23/03/2026', 'Psicopedagogia')])
+        dados.extend([('26/03/2026', 'Fisioterapia'), ('26/03/2026', 'Fonoaudiologia'), ('26/03/2026', 'Psicologia'), ('26/03/2026', 'Psicomotricidade')])
+
+    elif paciente_identificado == "Jade Bandeira de Oliveira":
+        for dia in ['02/03/2026', '04/03/2026', '09/03/2026', '11/03/2026', '18/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fonoaudiologia'), (dia, 'Psicopedagogia')])
+        for dia in ['05/03/2026', '19/03/2026', '26/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia')])
+        for dia in ['10/03/2026', '31/03/2026']:
+             dados.extend([(dia, 'Fisioterapia'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia')])
+        dados.extend([('13/03/2026', 'Fisioterapia'), ('13/03/2026', 'Terapia Ocupacional')])
+        dados.extend([('16/03/2026', 'Fisioterapia'), ('16/03/2026', 'Fonoaudiologia')])
+        for dia in ['20/03/2026', '27/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia')])
+        for dia in ['23/03/2026', '24/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicopedagogia')])
+        dados.extend([('25/03/2026', 'Terapia Ocupacional'), ('25/03/2026', 'Fonoaudiologia'), ('25/03/2026', 'Psicopedagogia')])
+
+    elif paciente_identificado == "João Pedro Roucourt Salviano":
+        for dia in ['02/03/2026', '03/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia'), (dia, 'Psicopedagogia'), (dia, 'Psicomotricidade')])
+        for dia in ['05/03/2026', '12/03/2026', '19/03/2026']:
+             dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia'), (dia, 'Psicopedagogia')])
+        for dia in ['09/03/2026', '10/03/2026', '16/03/2026', '17/03/2026', '23/03/2026', '24/03/2026', '30/03/2026', '31/03/2026']:
+             dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Psicologia'), (dia, 'Psicopedagogia')])
+
+    elif paciente_identificado == "Malu Alves Bicalho":
+        for dia in ['04/03/2026', '05/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia'), (dia, 'Psicologia')])
+        for dia in ['09/03/2026', '16/03/2026', '23/03/2026', '30/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia')])
+        dados.extend([('12/03/2026', 'Fisioterapia'), ('12/03/2026', 'Terapia Ocupacional'), ('12/03/2026', 'Fonoaudiologia'), ('12/03/2026', 'Psicologia'), ('12/03/2026', 'Psicopedagogia')])
+        dados.extend([('13/03/2026', 'Fonoaudiologia'), ('13/03/2026', 'Psicologia')])
+        for dia in ['17/03/2026', '24/03/2026']:
+            dados.extend([(dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia')])
+        for dia in ['18/03/2026', '25/03/2026']:
+             dados.extend([(dia, 'Psicologia')])
+        dados.extend([('20/03/2026', 'Fisioterapia'), ('20/03/2026', 'Fonoaudiologia'), ('20/03/2026', 'Psicologia')])
+        dados.extend([('26/03/2026', 'Fonoaudiologia'), ('26/03/2026', 'Psicologia')])
+        dados.extend([('27/03/2026', 'Fisioterapia')])
+
+    elif paciente_identificado == "Joseph Miguel Ferreira Diniz":
+        for dia in ['04/03/2026', '12/03/2026', '19/03/2026', '20/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Fonoaudiologia')])
+        for dia in ['05/03/2026', '06/03/2026', '09/03/2026', '10/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'Fonoaudiologia')])
+        for dia in ['11/03/2026', '18/03/2026', '25/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Fonoaudiologia'), (dia, 'CME')])
+        for dia in ['16/03/2026', '17/03/2026', '24/03/2026', '31/03/2026']:
+            dados.extend([(dia, 'Fisioterapia'), (dia, 'Fisioterapia'), (dia, 'Terapia Ocupacional'), (dia, 'CME')])
+        dados.extend([('23/03/2026', 'Fisioterapia'), ('23/03/2026', 'Fisioterapia'), ('23/03/2026', 'Terapia Ocupacional'), ('23/03/2026', 'Fonoaudiologia'), ('23/03/2026', 'CME')])
+        dados.extend([('26/03/2026', 'Fisioterapia'), ('26/03/2026', 'Fisioterapia'), ('26/03/2026', 'Terapia Ocupacional')])
+        dados.extend([('30/03/2026', 'Fisioterapia'), ('30/03/2026', 'Fisioterapia')])
+
+    return pd.DataFrame(dados, columns=['Data', 'Especialidade']), paciente_identificado
+
+def analisar_prontuario(texto_pdf):
     evolucoes = []
-    blocos = re.split(r'\nProfissional: ', '\n' + texto)[1:]
+    blocos = re.split(r'\nProfissional: ', '\n' + texto_pdf)[1:]
+    stop_phrases = ["Av. Dr. Renato de Andrade Maia"]
     for bloco in blocos:
-        match_esp = re.search(r"Especialidade: (.*?)\n", bloco)
-        match_data = re.search(r"Data: (\d{2}/\d{2}/\d{4})", bloco)
-        match_anot = re.search(r"Anotações:\n(.*?)(?=\Z|Profissional:)", bloco, re.DOTALL)
-        if match_data and match_esp and match_anot:
-            evolucoes.append({
-                'Especialidade': match_esp.group(1).strip().replace('TO', 'Terapia Ocupacional'),
-                'Data': match_data.group(1).strip(),
-                'Anotacoes': match_anot.group(1).strip()
-            })
-    return pd.DataFrame(evolucoes)
-
-# --- UI INTERFACE ---
-st.markdown('<h1 class="main-title">Report Generator.</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Documentação clínica automatizada.</p>', unsafe_allow_html=True)
-
-with st.container():
-    st.markdown("### 1. Upload de Documentos")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        controle_pdf = st.file_uploader("Controle de Frequência", type="pdf")
-    with col2:
-        prontuario_pdf = st.file_uploader("Prontuário Atual", type="pdf")
-    
-    anterior_pdf = st.file_uploader("Prontuário Anterior (Opcional - Para preencher vazios)", type="pdf")
-
-    st.markdown("### 2. Filtro de Período")
-    col3, col4 = st.columns(2)
-    with col3:
-        data_ini = st.date_input("Início", value=datetime(2026, 2, 1))
-    with col4:
-        data_fim = st.date_input("Fim", value=datetime(2026, 2, 28))
-
-# --- PROCESSAMENTO AO CLICAR ---
-if st.button("Gerar Relatório Profissional"):
-    if controle_pdf and prontuario_pdf:
         try:
-            with st.spinner("Compilando evoluções..."):
-                texto_ctrl = extrair_texto_pdf(controle_pdf)
-                texto_pront = extrair_texto_pdf(prontuario_pdf)
-                
-                # Identificar paciente e agenda (Usando sua lógica original)
-                # ... [Função get_schedule_for_patient seria chamada aqui] ...
-                # Para simplificar o exemplo, vamos assumir que extraímos os dados:
-                
-                st.success("Relatório gerado com sucesso!")
-                
-                # Botão de download do DOCX apareceria aqui após gerar o BytesIO
-                st.download_button(
-                    label="✓ Baixar Relatório (.docx)",
-                    data=b"arquivo_bytes", # Aqui vai o retorno da sua função gerar_relatorio_docx
-                    file_name=f"Relatorio_Neuro_{datetime.now().strftime('%Y%m%d')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
+            profissional_completo = bloco.split('\n')[0].strip()
+            match_especialidade = re.search(r"Especialidade: (.*?)\n", bloco)
+            match_data = re.search(r"Data: (\d{2}/\d{2}/\d{4})", bloco)
+            match_anotacoes = re.search(r"Anotações:\n(.*?)(?=\Z|Profissional:)", bloco, re.DOTALL)
+            if match_data and match_especialidade and match_anotacoes:
+                especialidade = match_especialidade.group(1).strip()
+                data = match_data.group(1).strip()
+                anotacoes = match_anotacoes.group(1).strip()
+                anotacoes = re.sub(r'Inserido por.*\n?', '', anotacoes).strip()
+                primeiro_nome = profissional_completo.split(' ')[0]
+                if primeiro_nome and primeiro_nome in anotacoes:
+                    anotacoes = anotacoes.split(primeiro_nome)[0].strip()
+                for phrase in stop_phrases:
+                    if phrase in anotacoes:
+                        anotacoes = anotacoes.split(phrase)[0].strip()
+                anotacoes = re.sub(r'\n\s*\n', '\n', anotacoes)
+                if anotacoes:
+                    evolucoes.append({'Profissional': profissional_completo, 'Especialidade': especialidade, 'Data': data, 'Anotacoes_prontuario': anotacoes})
         except Exception as e:
-            st.error(f"Erro no processamento: {e}")
-    else:
-        st.warning("Ação necessária: Envie o Controle e o Prontuário.")
+            continue
+    return pd.DataFrame(evolucoes, columns=['Profissional', 'Especialidade', 'Data', 'Anotacoes_prontuario'])
 
-# --- FOOTER ---
-st.markdown("<br><br><hr><p style='text-align: center; color: #86868b; font-size: 13px;'>Copyright © 2026 Clínica Neurointegrando. Todos os direitos reservados.</p>", unsafe_allow_html=True)
+def deve_ignorar_anotacao(texto):
+    texto_lower = texto.lower()
+    for palavra in PALAVRAS_IGNORADAS:
+        if palavra in texto_lower:
+            return True
+    return False
+
+def preencher_vazios_com_anteriores(relatorio_df, df_anteriores):
+    if df_anteriores is None or df_anteriores.empty:
+        return relatorio_df
+    
+    df_anteriores['Especialidade'] = df_anteriores['Especialidade'].replace('TO', 'Terapia Ocupacional')
+
+    for index, row in relatorio_df.iterrows():
+        if pd.isna(row['Anotacoes']) or str(row['Anotacoes']).strip() == '':
+            especialidade = row['Especialidade']
+            evolucoes_antigas_esp = df_anteriores[df_anteriores['Especialidade'] == especialidade]
+            
+            anotacao_substituta = ""
+            for _, row_antiga in evolucoes_antigas_esp.iterrows():
+                texto_antigo = str(row_antiga['Anotacoes_prontuario'])
+                if not deve_ignorar_anotacao(texto_antigo):
+                    anotacao_substituta = texto_antigo
+                    break 
+            
+            if anotacao_substituta:
+                relatorio_df.at[index, 'Anotacoes'] = anotacao_substituta
+                
+    return relatorio_df
+
+def gerar_relatorio_docx(df_sessoes, df_evolucoes, df_evolucoes_anteriores, paciente):
+    if paciente is None or df_sessoes is None:
+        return None
+    
+    df_sessoes['Especialidade'] = df_sessoes['Especialidade'].replace('TO', 'Terapia Ocupacional')
+    df_evolucoes['Especialidade'] = df_evolucoes['Especialidade'].replace('TO', 'Terapia Ocupacional')
+
+    try:
+        df_sessoes['Data_dt'] = pd.to_datetime(df_sessoes['Data'], format='%d/%m/%Y')
+        df_sessoes = df_sessoes.sort_values(by='Data_dt', ascending=False).drop(columns=['Data_dt'])
+    except ValueError:
+         pass
+
+    relatorio_df = pd.merge(df_sessoes, df_evolucoes, on=['Data', 'Especialidade'], how='left')
+    mapa_paciente = PROFESSIONAL_MAP.get(paciente, {})
+    relatorio_df['Profissional'] = relatorio_df['Especialidade'].map(mapa_paciente).fillna('A Definir')
+    
+    relatorio_df['Anotacoes'] = relatorio_df.get('Anotacoes_prontuario', '')
+    relatorio_df['Anotacoes'] = relatorio_df['Anotacoes'].fillna('')
+
+    relatorio_df = preencher_vazios_com_anteriores(relatorio_df, df_evolucoes_anteriores)
+
+    document = Document()
+    style = document.styles['Normal']
+    style.font.name = 'Arial'
+    style.font.size = Pt(12)
+    document.add_heading(f'Relatório de Evolução - {paciente}', level=1)
+
+    for _, row in relatorio_df.iterrows():
+        if row['Data'] == 'Erro': continue
+
+        p_prof = document.add_paragraph()
+        p_prof.add_run('Profissional: ').bold = True
+        p_prof.add_run(row['Profissional'])
+
+        p_esp = document.add_paragraph()
+        p_esp.add_run('Especialidade: ').bold = True
+        p_esp.add_run(row['Especialidade'])
+
+        p_data = document.add_paragraph()
+        p_data.add_run('Data: ').bold = True
+        p_data.add_run(row['Data'])
+        
+        p_anot = document.add_paragraph()
+        p_anot.add_run('Anotações: ').bold = True
+        p_anot.add_run(str(row['Anotacoes']))
+
+        document.add_paragraph()
+
+    file_stream = BytesIO()
+    document.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
+
+def filtrar_sessoes_por_data(df_sessoes, data_inicio_str, data_fim_str):
+    if not data_inicio_str or not data_fim_str:
+        return df_sessoes
+    try:
+        df_copy = df_sessoes.copy()
+        df_copy['Data_dt'] = pd.to_datetime(df_copy['Data'], format='%d/%m/%Y', errors='coerce')
+        df_copy = df_copy.dropna(subset=['Data_dt'])
+
+        data_inicio = pd.to_datetime(data_inicio_str, format='%Y-%m-%d')
+        data_fim = pd.to_datetime(data_fim_str, format='%Y-%m-%d')
+        
+        df_filtrado = df_copy[(df_copy['Data_dt'] >= data_inicio) & (df_copy['Data_dt'] <= data_fim)].drop(columns=['Data_dt'])
+        return df_filtrado
+    except ValueError:
+        return df_sessoes
+
+# --- Rotas da Aplicação Web ---
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    error_message = None
+    if request.method == 'POST':
+        if 'controle_pdf' not in request.files or 'prontuario_pdf' not in request.files:
+            return render_template('index.html', error="Erro: Faltando um ou mais arquivos.")
+
+        controle_file = request.files['controle_pdf']
+        prontuario_file = request.files['prontuario_pdf']
+        prontuario_anterior_file = request.files.get('prontuario_anterior_pdf') 
+
+        if controle_file.filename == '' or prontuario_file.filename == '':
+            return render_template('index.html', error="Erro: Selecione os arquivos principais.")
+
+        caminho_controle = os.path.join(app.config['UPLOAD_FOLDER'], controle_file.filename)
+        caminho_prontuario = os.path.join(app.config['UPLOAD_FOLDER'], prontuario_file.filename)
+        
+        df_evolucoes_anteriores = None 
+        caminho_anterior = None
+
+        try:
+            controle_file.save(caminho_controle)
+            prontuario_file.save(caminho_prontuario)
+            
+            if prontuario_anterior_file and prontuario_anterior_file.filename != '':
+                caminho_anterior = os.path.join(app.config['UPLOAD_FOLDER'], prontuario_anterior_file.filename)
+                prontuario_anterior_file.save(caminho_anterior)
+                texto_anterior = extrair_texto_de_pdf(caminho_anterior)
+                df_evolucoes_anteriores = analisar_prontuario(texto_anterior)
+
+            texto_controle = extrair_texto_de_pdf(caminho_controle)
+            texto_prontuario = extrair_texto_de_pdf(caminho_prontuario)
+            
+            df_sessoes, paciente = get_schedule_for_patient(texto_controle)
+            if paciente is None:
+                raise ValueError("Paciente não reconhecido.")
+
+            data_inicio = request.form.get('data_inicio')
+            data_fim = request.form.get('data_fim')
+            df_sessoes_filtradas = filtrar_sessoes_por_data(df_sessoes, data_inicio, data_fim)
+            
+            df_evolucoes = analisar_prontuario(texto_prontuario)
+            
+            file_stream = gerar_relatorio_docx(df_sessoes_filtradas, df_evolucoes, df_evolucoes_anteriores, paciente)
+
+            primeiro_nome = paciente.split(' ')[0]
+            nome_arquivo = f"Relatorio_{primeiro_nome}_{datetime.now().strftime('%Y-%m-%d')}.docx"
+
+            return send_file(
+                file_stream,
+                as_attachment=True,
+                download_name=nome_arquivo,
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
+        
+        except Exception as e:
+            error_message = f"Erro ao processar arquivos: {e}"
+            print(error_message)
+            
+        finally:
+            if os.path.exists(caminho_controle): os.remove(caminho_controle)
+            if os.path.exists(caminho_prontuario): os.remove(caminho_prontuario)
+            if caminho_anterior and os.path.exists(caminho_anterior): os.remove(caminho_anterior)
+                
+    return render_template('index.html', error=error_message)
+
+if __name__ == '__main__':
+    app.run(debug=False)
